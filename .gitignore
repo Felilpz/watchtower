@@ -1,4 +1,7 @@
 .env
 venv/
+data/
 __pycache__/
+modules/__pycache__/
+*.pyc
 logs/

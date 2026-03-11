@@ -8,12 +8,11 @@ from modules.latency_monitor import check_latency
 from modules.bandwidth_monitor import check_bandwidth
 from modules.device_monitor import check_devices, send_network_summary
 
-# Intervalos (segundos)
-INTERVAL_WAN      = 30    # checa WAN a cada 30s
-INTERVAL_LATENCY  = 60    # latência a cada 1 min
-INTERVAL_BANDWIDTH = 600  # banda a cada 10 min
-INTERVAL_DEVICES  = 300   # dispositivos a cada 5 min
-POLL_INTERVAL     = 3    
+INTERVAL_WAN       = 30
+INTERVAL_LATENCY   = 60
+INTERVAL_BANDWIDTH = 600
+INTERVAL_DEVICES   = 300
+POLL_INTERVAL      = 3
 
 _last_update_id = 0
 
@@ -35,13 +34,16 @@ def handle_commands():
         text = msg.get("text", "").strip().lower()
 
         if chat_id != str(CHAT_ID):
-            continue  # ignora chats não autorizados
+            continue
 
         if text == "/rede":
-            send_network_summary()
+            threading.Thread(target=send_network_summary, daemon=True).start()
 
         elif text == "/status":
-            send_alert(get_wan_status(), parse_mode="Markdown")
+            threading.Thread(
+                target=lambda: send_alert(get_wan_status(), parse_mode="Markdown"),
+                daemon=True
+            ).start()
 
         elif text == "/help":
             send_alert(
@@ -52,7 +54,6 @@ def handle_commands():
                 parse_mode="Markdown"
             )
 
-#  Loop genérico de tarefa periódica 
 def run_periodically(func, interval: int, name: str):
     while True:
         try:
@@ -61,7 +62,6 @@ def run_periodically(func, interval: int, name: str):
             print(f"[{name}] Erro: {e}")
         time.sleep(interval)
 
-#  Inicialização 
 def main():
     send_alert("🚀 *WatchTower iniciado!*\nDigite /help para ver os comandos.", parse_mode="Markdown")
 
@@ -77,7 +77,6 @@ def main():
         t.start()
         print(f"[WatchTower] ✅ {name} iniciado (intervalo: {interval}s)")
 
-    # Loop de comandos no thread principal
     print("[WatchTower] 🎧 Aguardando comandos Telegram...")
     while True:
         try:
