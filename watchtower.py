@@ -1,8 +1,11 @@
 import logging
 import threading
-from modules.wan_monitor import iniciar_monitoramento_wan
+from telegram.ext import ApplicationBuilder, CommandHandler
 
-# Logging
+from config import TELEGRAM_TOKEN
+from modules.wan_monitor import iniciar_monitoramento_wan
+from modules.bot_commands import cmd_start, cmd_wan, cmd_ping, cmd_devices
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -12,25 +15,22 @@ logger = logging.getLogger("watchtower")
 
 
 def main():
-    logger.info("=" * 50)
-    logger.info("  WatchTower Bot iniciando...")
-    logger.info("=" * 50)
+    logger.info("watchtower iniciando...")
 
-    # monitor WAN em thread separada
-    t_wan = threading.Thread(
+    threading.Thread(
         target=iniciar_monitoramento_wan,
         name="wan-monitor",
         daemon=True,
-    )
-    t_wan.start()
-    logger.info("Thread WAN Monitor: OK")
+    ).start()
 
-    try:
-        while True:
-            import time
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("WatchTower encerrado pelo usuário.")
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("wan",     cmd_wan))
+    app.add_handler(CommandHandler("ping",    cmd_ping))
+    app.add_handler(CommandHandler("devices", cmd_devices))
+
+    logger.info("bot aguardando comandos...")
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
