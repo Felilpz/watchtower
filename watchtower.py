@@ -1,95 +1,37 @@
+import logging
 import threading
-import time
-import requests
-from config import TOKEN, CHAT_ID
-from modules.telegram_alert import send_alert
-from modules.wan_monitor import check_wans, get_wan_status
-from modules.latency_monitor import check_latency
-from modules.bandwidth_monitor import check_bandwidth
-from modules.device_monitor import check_devices, send_network_summary
-from modules.critical_monitor import check_critical_devices, send_critical_summary
+from modules.wan_monitor import iniciar_monitoramento_wan
 
-INTERVAL_WAN       = 30
-INTERVAL_LATENCY   = 60
-INTERVAL_BANDWIDTH = 600
-INTERVAL_DEVICES   = 300
-INTERVAL_CRITICAL  = 300
-POLL_INTERVAL      = 3
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("watchtower")
 
-_last_update_id = 0
-
-def handle_commands():
-    global _last_update_id
-    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-    params = {"offset": _last_update_id + 1, "timeout": 2}
-
-    try:
-        resp = requests.get(url, params=params, timeout=5)
-        data = resp.json()
-    except Exception:
-        return
-
-    for update in data.get("result", []):
-        _last_update_id = update["update_id"]
-        msg = update.get("message", {})
-        chat_id = str(msg.get("chat", {}).get("id", ""))
-        text = msg.get("text", "").strip().lower()
-
-        if chat_id != str(CHAT_ID):
-            continue
-
-        if text == "/rede":
-            threading.Thread(target=send_network_summary, daemon=True).start()
-
-        elif text == "/criticos":
-            threading.Thread(target=send_critical_summary, daemon=True).start()
-
-        elif text == "/status":
-            threading.Thread(
-                target=lambda: send_alert(get_wan_status()),
-                daemon=True
-            ).start()
-
-        elif text == "/help":
-            send_alert(
-                "WatchTower Commands\n\n"
-                "/rede — Lista dispositivos e IPs disponiveis\n"
-                "/criticos — Status dos dispositivos criticos\n"
-                "/status — Status atual das WANs\n"
-                "/help — Esta mensagem"
-            )
-
-def run_periodically(func, interval: int, name: str):
-    while True:
-        try:
-            func()
-        except Exception as e:
-            print(f"[{name}] Erro: {e}")
-        time.sleep(interval)
 
 def main():
-    send_alert("WatchTower iniciado! Digite /help para ver os comandos.")
+    logger.info("=" * 50)
+    logger.info("  WatchTower Bot iniciando...")
+    logger.info("=" * 50)
 
-    tasks = [
-        (check_wans,             INTERVAL_WAN,       "WAN Monitor"),
-        (check_latency,          INTERVAL_LATENCY,   "Latency Monitor"),
-        (check_bandwidth,        INTERVAL_BANDWIDTH, "Bandwidth Monitor"),
-        (check_devices,          INTERVAL_DEVICES,   "Device Monitor"),
-        (check_critical_devices, INTERVAL_CRITICAL,  "Critical Monitor"),
-    ]
+    # monitor WAN em thread separada
+    t_wan = threading.Thread(
+        target=iniciar_monitoramento_wan,
+        name="wan-monitor",
+        daemon=True,
+    )
+    t_wan.start()
+    logger.info("Thread WAN Monitor: OK")
 
-    for func, interval, name in tasks:
-        t = threading.Thread(target=run_periodically, args=(func, interval, name), daemon=True)
-        t.start()
-        print(f"[WatchTower] {name} iniciado (intervalo: {interval}s)")
+    try:
+        while True:
+            import time
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("WatchTower encerrado pelo usuário.")
 
-    print("[WatchTower] Aguardando comandos Telegram...")
-    while True:
-        try:
-            handle_commands()
-        except Exception as e:
-            print(f"[Commands] Erro: {e}")
-        time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
     main()
