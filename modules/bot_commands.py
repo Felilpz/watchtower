@@ -183,19 +183,28 @@ async def cmd_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     linhas = []
     for linha in eventos:
         try:
-            partes = linha.split("/index.php:")[-1].strip()
+            partes  = linha.split("/index.php:")[-1].strip()
             usuario = partes.split("'")[1] if "'" in partes else "?"
             origem  = partes.split("from:")[-1].strip().split()[0] if "from:" in partes else "?"
-            horario = linha.split()[0] if linha else ""
+            # converte "2026-04-17T21:44:00-03:00" → "17/04/2026 21:44:00"
+            ts_raw  = linha.split()[0]
+            ts      = datetime.fromisoformat(ts_raw).strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
-            usuario, origem, horario = "?", "?", ""
+            usuario, origem, ts = "?", "?", "?"
 
         if "Successful login" in linha:
-            linhas.append(f"✅ <code>{usuario}</code> — {origem}\n    {horario}")
+            emoji = "✅"
+            acao  = "Login"
         elif "logged out" in linha.lower():
-            linhas.append(f"🚪 <code>{usuario}</code> — {origem}\n    {horario}")
+            emoji = "🚪"
+            acao  = "Logout"
         elif "Failed login" in linha:
-            linhas.append(f"❌ <code>{usuario}</code> — {origem}\n    {horario}")
+            emoji = "❌"
+            acao  = "Falha"
+        else:
+            continue
+
+        linhas.append(f"{emoji} <b>{acao}</b> — <code>{usuario}</code> ({origem})\n    ⏱ {ts}")
 
     texto = (
         "🔐 <b>Acessos ao webConfigurator</b>\n"
