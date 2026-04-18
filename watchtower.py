@@ -1,10 +1,12 @@
 import logging
 import threading
+import requests
+from datetime import datetime
 from telegram.ext import ApplicationBuilder, CommandHandler
 
-from config import TELEGRAM_TOKEN
+from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from modules.wan_monitor import iniciar_monitoramento_wan
-from modules.bot_commands import cmd_start, cmd_wan, cmd_ping, cmd_devices
+from modules.bot_commands import cmd_start, cmd_wan, cmd_ping, cmd_devices, cmd_logins
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,6 +14,31 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("watchtower")
+
+
+def _enviar_boot():
+    now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    texto = (
+        "🟢 <b>WatchTower iniciado</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n\n"
+        "📡 <b>WAN</b>\n"
+        "  /wan — status dos links\n\n"
+        "🖥 <b>Dispositivos</b>\n"
+        "  /devices — listar todos\n"
+        "  /ping &lt;nome&gt; — pingar dispositivo\n\n"
+        "🔐 <b>Segurança</b>\n"
+        "  /logins — últimos acessos ao pfSense\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ {now}"
+    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": texto, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error(f"erro ao enviar mensagem de boot: {e}")
 
 
 def main():
@@ -28,6 +55,9 @@ def main():
     app.add_handler(CommandHandler("wan",     cmd_wan))
     app.add_handler(CommandHandler("ping",    cmd_ping))
     app.add_handler(CommandHandler("devices", cmd_devices))
+    app.add_handler(CommandHandler("logins",  cmd_logins))
+
+    _enviar_boot()
 
     logger.info("bot aguardando comandos...")
     app.run_polling(drop_pending_updates=True)
