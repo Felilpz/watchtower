@@ -1,61 +1,87 @@
-import paramiko
-import xml.etree.ElementTree as ET
-import os
-from dotenv import load_dotenv
+import time
+import logging
+import requests
+from datetime import datetime
+from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
+logger = logging.getLogger(__name__)
 
-PFSENSE_HOST = os.getenv("PFSENSE_HOST", "192.168.100.1")
-PFSENSE_USER = os.getenv("PFSENSE_USER", "admin")
-PFSENSE_PASS = os.getenv("PFSENSE_PASS", "")
-PFSENSE_PORT = int(os.getenv("PFSENSE_PORT", 22))
+LOG_PATH = "/var/log/pfsense/all.log"
 
-def _ssh_command(command: str) -> str:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(PFSENSE_HOST, port=PFSENSE_PORT, username=PFSENSE_USER, password=PFSENSE_PASS, timeout=5)
-    _, stdout, _ = client.exec_command(command)
-    result = stdout.read().decode()
-    client.close()
-    return result
 
-def get_dhcp_leases() -> dict:
-    leases = {}
+def _now() -> str:
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+
+def _send(text: str):
     try:
-        # 1. Lê leases dinâmicos
-        content = _ssh_command("cat /var/dhcpd/var/db/dhcpd.leases")
-        current = {}
-        for line in content.splitlines():
-            line = line.strip()
-            if line.startswith("lease "):
-                current = {"ip": line.split()[1], "hostname": "", "mac": ""}
-            elif line.startswith("hardware ethernet"):
-                current["mac"] = line.split()[-1].rstrip(";").lower()
-            elif line.startswith("client-hostname"):
-                current["hostname"] = line.split('"')[1] if '"' in line else ""
-            elif line == "}":
-                mac = current.get("mac")
-                if mac:
-                    leases[mac] = {
-                        "ip": current.get("ip", ""),
-                        "hostname": current.get("hostname", "")
-                    }
-                current = {}
-
-        # 2. Lê static mappings do config.xml
-        xml_content = _ssh_command("cat /cf/conf/config.xml")
-        root = ET.fromstring(xml_content)
-
-        for dhcp in root.iter("dhcpd"):
-            for subnet in dhcp:
-                for mapping in subnet.findall("staticmap"):
-                    mac = mapping.findtext("mac", "").lower().strip()
-                    ip = mapping.findtext("ipaddr", "").strip()
-                    hostname = mapping.findtext("hostname", "").strip()
-                    if mac and ip and hostname:
-                        leases[mac] = {"ip": ip, "hostname": hostname}
-
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
     except Exception as e:
-        print(f"[pfSense SSH] Erro: {e}")
+        logger.error(f"erro ao enviar alerta pfsense: {e}")
 
-    return leases
+
+def _processar_linha(linha: str):
+    if "php-fpm" not in linha or "/index.php" not in linha:
+        return
+
+    # extrai usuario e ip da linha
+    # formato: php-fpm[x]: /index.php: <mensagem> for user 'X' from: Y
+    try:
+        partes = linha.split("/index.php:")[-1].strip()
+        usuario = partes.split("'")[1] if "'" in partes else "desconhecido"
+        origem = partes.split("from:")[-1].strip().split()[0] if "from:" in partes else "?"
+    except Exception:
+        usuario, origem = "desconhecido", "?"
+
+    if "Successful login" in linha:
+        _send(
+            f"🔐 <b>LOGIN — webConfigurator</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Usuário:</b> <code>{usuario}</code>\n"
+            f"🌐 <b>IP:</b> <code>{origem}</code>\n"
+            f"✅ <b>Status:</b> Autenticado\n"
+            f"⏱ {_now()}"
+        )
+    elif "logged out" in linha.lower():
+        _send(
+            f"🔓 <b>LOGOUT — webConfigurator</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Usuário:</b> <code>{usuario}</code>\n"
+            f"🌐 <b>IP:</b> <code>{origem}</code>\n"
+            f"⏱ {_now()}"
+        )
+    elif "Failed login" in linha or "invalid" in linha.lower():
+        _send(
+            f"🚨 <b>FALHA DE LOGIN — webConfigurator</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Usuário:</b> <code>{usuario}</code>\n"
+            f"🌐 <b>IP:</b> <code>{origem}</code>\n"
+            f"❌ <b>Status:</b> Credencial inválida\n"
+            f"⏱ {_now()}"
+        )
+
+
+def iniciar_monitor_pfsense():
+    logger.info(f"monitor pfsense iniciado | arquivo: {LOG_PATH}")
+
+    try:
+        f = open(LOG_PATH, "r", encoding="utf-8", errors="ignore")
+        f.seek(0, 2)  # vai para o final do arquivo
+    except FileNotFoundError:
+        logger.error(f"arquivo não encontrado: {LOG_PATH}")
+        return
+
+    while True:
+        try:
+            linha = f.readline()
+            if linha:
+                _processar_linha(linha)
+            else:
+                time.sleep(1)
+        except Exception as e:
+            logger.error(f"erro no monitor pfsense: {e}")
+            time.sleep(5)
