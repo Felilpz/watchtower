@@ -36,6 +36,9 @@ def _ssh_pfsense(comando: str) -> str | None:
             username=PFSENSE_USER,
             password=PFSENSE_PASS,
             timeout=10,
+            auth_timeout=10,
+            look_for_keys=False,
+            allow_agent=False,
         )
         _, stdout, stderr = client.exec_command(comando)
         saida = stdout.read().decode(errors="ignore").strip()
