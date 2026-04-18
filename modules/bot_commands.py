@@ -1,10 +1,9 @@
 import json
 import logging
-import paramiko
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import STATIC_JSON_PATH, PFSENSE_HOST, PFSENSE_USER, PFSENSE_PASS, PFSENSE_PORT
+from config import STATIC_JSON_PATH
 from modules.wan_monitor import status_gateways, ping_host
 
 logger = logging.getLogger(__name__)
@@ -24,29 +23,6 @@ def _carregar_devices() -> dict:
     except json.JSONDecodeError as e:
         logger.error(f"erro ao parsear static.json: {e}")
         return {}
-
-
-def _ssh_pfsense(comando: str) -> str | None:
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            hostname=PFSENSE_HOST,
-            port=PFSENSE_PORT,
-            username=PFSENSE_USER,
-            password=PFSENSE_PASS,
-            timeout=10,
-            auth_timeout=10,
-            look_for_keys=False,
-            allow_agent=False,
-        )
-        _, stdout, stderr = client.exec_command(comando)
-        saida = stdout.read().decode(errors="ignore").strip()
-        client.close()
-        return saida
-    except Exception as e:
-        logger.error(f"erro ssh pfsense: {e}")
-        return None
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,35 +161,47 @@ async def cmd_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Consultando acessos ao webConfigurator...", parse_mode="HTML")
+    log_path = "/var/log/pfsense/all.log"
 
-    saida = _ssh_pfsense("clog /var/log/system.log 2>/dev/null | grep -i 'webconfigurator' | tail -20")
-
-    if saida is None:
-        await update.message.reply_text("❌ Não foi possível conectar ao pfSense via SSH.")
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            linhas_raw = f.readlines()
+    except FileNotFoundError:
+        await update.message.reply_text("❌ Log do pfSense não encontrado.")
         return
 
-    if not saida:
+    eventos = [
+        l.strip() for l in linhas_raw
+        if "php-fpm" in l and "/index.php" in l
+        and any(k in l for k in ("Successful login", "logged out", "Failed login"))
+    ][-20:]
+
+    if not eventos:
         await update.message.reply_text("ℹ️ Nenhum acesso ao webConfigurator encontrado.")
         return
 
     linhas = []
-    for linha in saida.splitlines():
-        l = linha.lower()
-        if "successful" in l or "logged in" in l:
-            linhas.append(f"🟢 {linha}")
-        elif "failed" in l or "invalid" in l or "error" in l:
-            linhas.append(f"🔴 {linha}")
-        elif "logged out" in l or "logout" in l:
-            linhas.append(f"🟡 {linha}")
-        else:
-            linhas.append(f"⚪ {linha}")
+    for linha in eventos:
+        try:
+            partes = linha.split("/index.php:")[-1].strip()
+            usuario = partes.split("'")[1] if "'" in partes else "?"
+            origem  = partes.split("from:")[-1].strip().split()[0] if "from:" in partes else "?"
+            horario = linha.split()[0] if linha else ""
+        except Exception:
+            usuario, origem, horario = "?", "?", ""
+
+        if "Successful login" in linha:
+            linhas.append(f"✅ <code>{usuario}</code> — {origem}\n    {horario}")
+        elif "logged out" in linha.lower():
+            linhas.append(f"🚪 <code>{usuario}</code> — {origem}\n    {horario}")
+        elif "Failed login" in linha:
+            linhas.append(f"❌ <code>{usuario}</code> — {origem}\n    {horario}")
 
     texto = (
         "🔐 <b>Acessos ao webConfigurator</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "<pre>" + "\n".join(linhas) + "</pre>\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        + "\n".join(linhas) +
+        "\n━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ {_now()}"
     )
 
