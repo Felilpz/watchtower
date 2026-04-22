@@ -1,105 +1,110 @@
+import time
+import logging
 import subprocess
+import platform
+import re
 import json
-import os
-from modules.telegram_alert import send_alert
-from modules.pfsense_monitor import get_dhcp_leases
+import requests
+from datetime import datetime
+from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, STATIC_JSON_PATH
 
-KNOWN_DEVICES_FILE = os.path.join(os.path.dirname(__file__), "../data/known_devices.json")
+logger = logging.getLogger(__name__)
 
-def load_known_devices():
-    if os.path.exists(KNOWN_DEVICES_FILE):
-        with open(KNOWN_DEVICES_FILE, "r") as f:
-            return json.load(f)
-    return {}
+DEVICE_PING_INTERVAL = 60
+PING_TIMEOUT         = 2
+PING_COUNT           = 2
 
-def save_known_devices(devices: dict):
-    os.makedirs(os.path.dirname(KNOWN_DEVICES_FILE), exist_ok=True)
-    with open(KNOWN_DEVICES_FILE, "w") as f:
-        json.dump(devices, f, indent=2)
+# { "SWITCH 01": True/False/None }
+_estado: dict[str, bool | None] = {}
 
-def scan_network() -> dict:
+
+def _now() -> str:
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+
+def _send(text: str):
     try:
-        result = subprocess.check_output(
-            ["arp-scan", "-I", "enp6s18", "--localnet"],
-            text=True, stderr=subprocess.DEVNULL
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10,
         )
-    except subprocess.CalledProcessError:
+    except Exception as e:
+        logger.error(f"erro ao enviar alerta device: {e}")
+
+
+def _ping(host: str) -> bool:
+    sistema = platform.system().lower()
+    if sistema == "windows":
+        cmd = ["ping", "-n", str(PING_COUNT), "-w", str(PING_TIMEOUT * 1000), host]
+    else:
+        cmd = ["ping", "-c", str(PING_COUNT), "-W", str(PING_TIMEOUT), host]
+
+    try:
+        resultado = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=PING_TIMEOUT * PING_COUNT + 3,
+        )
+        return resultado.returncode == 0
+    except Exception:
+        return False
+
+
+def _carregar_devices() -> dict:
+    try:
+        with open(STATIC_JSON_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"erro ao carregar static.json: {e}")
         return {}
 
-    devices = {}
-    for line in result.split("\n"):
-        parts = line.split()
-        if len(parts) >= 2 and "." in parts[0]:
-            ip = parts[0]
-            mac = parts[1].lower()
-            vendor = " ".join(parts[2:]) if len(parts) > 2 else "Desconhecido"
-            devices[mac] = {"ip": ip, "vendor": vendor, "hostname": ""}
-    return devices
 
-def enrich_with_hostnames(devices: dict) -> dict:
-    try:
-        leases = get_dhcp_leases()
-        for mac, info in devices.items():
-            if mac in leases and leases[mac].get("hostname"):
-                info["hostname"] = leases[mac]["hostname"]
-    except Exception as e:
-        print(f"[DeviceMonitor] Erro ao buscar hostnames: {e}")
-    return devices
+def _verificar_devices():
+    devices = _carregar_devices()
+    if not devices:
+        return
 
-def format_device_line(info: dict) -> str:
-    name = info.get("hostname") or info.get("vendor", "Desconhecido")
-    name = name[:28].replace("(", "").replace(")", "").replace("*", "").replace("_", "").replace("`", "")
-    return f"• {info['ip']} — {name}"
+    for nome, ip in devices.items():
+        online = _ping(ip)
+        anterior = _estado.get(nome)
 
-def send_in_chunks(lines: list, header: str):
-    chunk = header + "\n"
-    for line in lines:
-        if len(chunk) + len(line) + 1 > 4000:
-            send_alert(chunk)
-            chunk = "...continuacao\n"
-        chunk += line + "\n"
-    if chunk.strip():
-        send_alert(chunk)
+        if anterior is None:
+            _estado[nome] = online
+            logger.info(f"[device] {nome} ({ip}) estado inicial: {'online' if online else 'offline'}")
+            continue
 
-def check_devices(subnet: str = "192.168.100"):
-    known = load_known_devices()
-    current = scan_network()
-    current = enrich_with_hostnames(current)
-
-    for mac, info in current.items():
-        name = info.get("hostname") or info.get("vendor", "Desconhecido")
-        if mac not in known:
-            send_alert(
-                f"Novo dispositivo\nIP: {info['ip']}\nMAC: {mac}\nNome: {name}"
+        if anterior is True and not online:
+            logger.warning(f"[device] {nome} ({ip}) caiu")
+            _send(
+                f"🔴 <b>DISPOSITIVO OFFLINE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🖥 <b>Nome:</b> {nome}\n"
+                f"🎯 <b>IP:</b> <code>{ip}</code>\n"
+                f"⏱ <b>Detectado:</b> {_now()}"
             )
-        elif known[mac]["ip"] != info["ip"]:
-            send_alert(
-                f"Dispositivo trocou de IP\nNome: {name}\nMAC: {mac}\n{known[mac]['ip']} -> {info['ip']}"
+            _estado[nome] = False
+
+        elif anterior is False and online:
+            logger.info(f"[device] {nome} ({ip}) voltou")
+            _send(
+                f"🟢 <b>DISPOSITIVO ONLINE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🖥 <b>Nome:</b> {nome}\n"
+                f"🎯 <b>IP:</b> <code>{ip}</code>\n"
+                f"⏱ <b>Restaurado:</b> {_now()}"
             )
+            _estado[nome] = True
 
-    save_known_devices(current)
-    return current
 
-def send_network_summary(subnet: str = "192.168.100"):
-    devices = scan_network()
-    devices = enrich_with_hostnames(devices)
+def iniciar_monitor_devices():
+    devices = _carregar_devices()
+    logger.info(f"monitor devices iniciado | {len(devices)} dispositivos | intervalo: {DEVICE_PING_INTERVAL}s")
 
-    used_ips = {int(d["ip"].split(".")[-1]) for d in devices.values() if d["ip"].startswith(subnet)}
-    reserved = {0, 1, 255}
-    used_count = len([ip for ip in used_ips if ip not in reserved])
-    free_count = 253 - used_count
-
-    header = (
-        f"Dispositivos na rede\n"
-        f"Conectados: {used_count}\n"
-        f"IPs livres: {free_count}\n"
-        f"Total: 253\n"
-        f"-------------------"
-    )
-
-    lines = [
-        format_device_line(d)
-        for d in sorted(devices.values(), key=lambda x: int(x["ip"].split(".")[-1]))
-    ]
-
-    send_in_chunks(lines, header)
+    while True:
+        try:
+            _verificar_devices()
+        except Exception as e:
+            logger.error(f"erro no loop device monitor: {e}")
+        time.sleep(DEVICE_PING_INTERVAL)

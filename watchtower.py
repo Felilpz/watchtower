@@ -7,6 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from modules.wan_monitor import iniciar_monitoramento_wan
 from modules.pfsense_monitor import iniciar_monitor_pfsense
+from modules.device_monitor import iniciar_monitor_devices
 from modules.bot_commands import cmd_start, cmd_wan, cmd_ping, cmd_devices, cmd_logins
 
 logging.basicConfig(
@@ -54,6 +55,12 @@ def main():
     threading.Thread(
         target=iniciar_monitor_pfsense,
         name="pfsense-monitor",
+        daemon=True,
+    ).start()
+
+    threading.Thread(
+        target=iniciar_monitor_devices,
+        name="device-monitor",
         daemon=True,
     ).start()
 
