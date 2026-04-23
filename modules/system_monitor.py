@@ -187,11 +187,11 @@ def formatar_status(ubuntu: dict, pfsense: dict | None) -> str:
     # ubuntu
     u_cpu   = linha_pct("CPU  ", ubuntu["cpu"], "🔲")
     u_ram   = (
-        f"  🧠 <b>RAM:</b>   {_barra(ubuntu['ram_pct'])} {ubuntu['ram_pct']:.0f}%"
+        f"  🧠 <b>RAM:</b> {ubuntu['ram_pct']:.0f}%"
         f" ({_fmt_bytes(ubuntu['ram_usado'])} / {_fmt_bytes(ubuntu['ram_total'])})"
     )
     u_disco = (
-        f"  💾 <b>Disco:</b> {_barra(ubuntu['disco_pct'])} {ubuntu['disco_pct']:.0f}%"
+        f"  💾 <b>Disco:</b>{ubuntu['disco_pct']:.0f}%"
         f" ({_fmt_bytes(ubuntu['disco_usado'])} / {_fmt_bytes(ubuntu['disco_total'])})"
     )
     u_temp   = f"  🌡 <b>Temp:</b>  {ubuntu['temp']:.0f}°C" if ubuntu["temp"] else "  🌡 <b>Temp:</b>  —"
@@ -206,7 +206,7 @@ def formatar_status(ubuntu: dict, pfsense: dict | None) -> str:
     if pfsense:
         p_cpu    = linha_pct("CPU  ", pfsense["cpu"], "🔲") if pfsense["cpu"] is not None else "  🔲 <b>CPU:</b>  —"
         p_ram    = (
-            f"  🧠 <b>RAM:</b>   {_barra(pfsense['ram_pct'])} {pfsense['ram_pct']:.0f}%"
+            f"  🧠 <b>RAM:</b>{pfsense['ram_pct']:.0f}%"
             f" ({_fmt_bytes(pfsense['ram_usado'])} / {_fmt_bytes(pfsense['ram_total'])})"
             if pfsense["ram_pct"] is not None else "  🧠 <b>RAM:</b>  —"
         )
