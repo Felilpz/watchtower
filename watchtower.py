@@ -8,7 +8,11 @@ from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from modules.wan_monitor import iniciar_monitoramento_wan
 from modules.pfsense_monitor import iniciar_monitor_pfsense
 from modules.device_monitor import iniciar_monitor_devices
-from modules.bot_commands import cmd_start, cmd_wan, cmd_ping, cmd_devices, cmd_logins
+from modules.system_monitor import iniciar_monitor_sistema
+from modules.bot_commands import (
+    cmd_start, cmd_wan, cmd_ping, cmd_devices,
+    cmd_logins, cmd_status, cmd_uptime,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +32,9 @@ def _enviar_boot():
         "🖥 <b>Dispositivos</b>\n"
         "  /devices — listar todos\n"
         "  /ping &lt;nome&gt; — pingar dispositivo\n\n"
+        "📊 <b>Sistema</b>\n"
+        "  /status — CPU, RAM, disco e temperatura\n"
+        "  /uptime — tempo online das máquinas\n\n"
         "🔐 <b>Segurança</b>\n"
         "  /logins — últimos acessos ao pfSense\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -46,23 +53,15 @@ def _enviar_boot():
 def main():
     logger.info("watchtower iniciando...")
 
-    threading.Thread(
-        target=iniciar_monitoramento_wan,
-        name="wan-monitor",
-        daemon=True,
-    ).start()
+    threads = [
+        ("wan-monitor",     iniciar_monitoramento_wan),
+        ("pfsense-monitor", iniciar_monitor_pfsense),
+        ("device-monitor",  iniciar_monitor_devices),
+        ("system-monitor",  iniciar_monitor_sistema),
+    ]
 
-    threading.Thread(
-        target=iniciar_monitor_pfsense,
-        name="pfsense-monitor",
-        daemon=True,
-    ).start()
-
-    threading.Thread(
-        target=iniciar_monitor_devices,
-        name="device-monitor",
-        daemon=True,
-    ).start()
+    for nome, alvo in threads:
+        threading.Thread(target=alvo, name=nome, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start",   cmd_start))
@@ -70,6 +69,8 @@ def main():
     app.add_handler(CommandHandler("ping",    cmd_ping))
     app.add_handler(CommandHandler("devices", cmd_devices))
     app.add_handler(CommandHandler("logins",  cmd_logins))
+    app.add_handler(CommandHandler("status",  cmd_status))
+    app.add_handler(CommandHandler("uptime",  cmd_uptime))
 
     _enviar_boot()
 

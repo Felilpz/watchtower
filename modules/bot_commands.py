@@ -1,10 +1,13 @@
 import json
 import logging
+import time
+import psutil
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import STATIC_JSON_PATH
 from modules.wan_monitor import status_gateways, ping_host
+from modules.system_monitor import coletar_ubuntu, coletar_pfsense, formatar_status, _formatar_uptime
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🖥 <b>Dispositivos</b>\n"
         "  /devices — listar todos\n"
         "  /ping &lt;nome&gt; — pingar dispositivo\n\n"
+        "📊 <b>Sistema</b>\n"
+        "  /status — CPU, RAM, disco e temperatura\n"
+        "  /uptime — tempo online das máquinas\n\n"
         "🔐 <b>Segurança</b>\n"
         "  /logins — últimos acessos ao pfSense\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -135,7 +141,6 @@ async def cmd_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível carregar o static.json.")
         return
 
-    # agrupa pelo primeiro termo do nome (AP, SWITCH, CAMERA, etc.)
     categorias: dict[str, list] = {}
     for nome, ip in devices.items():
         prefixo = nome.split()[0] if " " in nome else nome
@@ -147,7 +152,6 @@ async def cmd_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
         itens = sorted(categorias[cat], key=lambda x: x[0])
         linhas.append(f"\n<b>{cat}</b>")
         for nome, ip in itens:
-            # nome sem o prefixo repetido para ficar mais limpo
             nome_curto = nome[len(cat):].strip() or nome
             linhas.append(f"  • {nome_curto}\n    <code>{ip}</code>")
 
@@ -186,21 +190,17 @@ async def cmd_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
             partes  = linha.split("/index.php:")[-1].strip()
             usuario = partes.split("'")[1] if "'" in partes else "?"
             origem  = partes.split("from:")[-1].strip().split()[0] if "from:" in partes else "?"
-            # converte "2026-04-17T21:44:00-03:00" → "17/04/2026 21:44:00"
             ts_raw  = linha.split()[0]
             ts      = datetime.fromisoformat(ts_raw).strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
             usuario, origem, ts = "?", "?", "?"
 
         if "Successful login" in linha:
-            emoji = "✅"
-            acao  = "Login"
+            emoji, acao = "✅", "Login"
         elif "logged out" in linha.lower():
-            emoji = "🚪"
-            acao  = "Logout"
+            emoji, acao = "🚪", "Logout"
         elif "Failed login" in linha:
-            emoji = "❌"
-            acao  = "Falha"
+            emoji, acao = "❌", "Falha"
         else:
             continue
 
@@ -219,3 +219,34 @@ async def cmd_logins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         for parte in [texto[i:i+4000] for i in range(0, len(texto), 4000)]:
             await update.message.reply_text(parte, parse_mode="HTML")
+
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Coletando dados do sistema...", parse_mode="HTML")
+    try:
+        ubuntu  = coletar_ubuntu()
+        pfsense = coletar_pfsense()
+        texto   = formatar_status(ubuntu, pfsense)
+    except Exception as e:
+        logger.error(f"erro ao coletar status: {e}")
+        texto = "❌ Erro ao coletar dados do sistema."
+    await update.message.reply_text(texto, parse_mode="HTML")
+
+
+async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Consultando uptime...", parse_mode="HTML")
+
+    u_uptime = _formatar_uptime(time.time() - psutil.boot_time())
+
+    pfsense  = coletar_pfsense()
+    p_uptime = _formatar_uptime(pfsense["uptime"]) if pfsense and pfsense.get("uptime") else "—"
+
+    texto = (
+        "⏱ <b>Uptime das Máquinas</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"🖥 <b>Ubuntu Server:</b> {u_uptime}\n"
+        f"🔥 <b>pfSense:</b>       {p_uptime}\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ {_now()}"
+    )
+    await update.message.reply_text(texto, parse_mode="HTML")
